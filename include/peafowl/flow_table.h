@@ -86,6 +86,7 @@ typedef enum {
 } pfwl_sip_method_t;
 
 #define PFWL_SIP_MAX_MEDIA_HOSTS 20
+#define PFWL_SSL_MAX_DATA_SIZE (65000)
 
 typedef struct {
   const char *name;
@@ -139,16 +140,25 @@ typedef struct pfwl_http_internal_informations {
 /********************** SSL ************************/
 typedef enum { PFWL_SSLV2 = 0, PFWL_SSLV3, PFWL_TLSV1_2 } pfwl_ssl_version_t;
 
+typedef struct pfwl_ssl_internal_packet_data {
+  unsigned char packets_data[2][PFWL_SSL_MAX_DATA_SIZE];
+  uint32_t packets_data_len[2];
+  uint32_t next_seq_num[2]; // Next packet expected (needed to ensure data safety)
+} pfwl_ssl_internal_packet_data_t;
+
 typedef struct pfwl_ssl_internal_information_new {
   uint8_t stage;
   uint8_t certificate_num_checks;
   uint8_t certificates_detected;
-  unsigned char first_bytes[2][6];
-  uint8_t next_first_bytes[2];
-  uint32_t processed_bytes[2];
+  unsigned char *certificates; // Found certificates
+
   uint32_t next_server_extension;
   uint32_t remaining_extension_len;
   pfwl_ssl_version_t version;
+
+  // Previous packets data to parse ssl on multiple packets (for each direction)
+  pfwl_ssl_internal_packet_data_t *ssl_data;
+
 } pfwl_ssl_internal_information_t;
 /********************** SSL (END) ************************/
 

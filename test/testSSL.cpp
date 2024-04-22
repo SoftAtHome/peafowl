@@ -18,8 +18,8 @@ TEST(SSLTest, Generic) {
   getProtocols("./pcaps/ssl-3.pcap", protocols);
   EXPECT_EQ(protocols[PFWL_PROTO_L7_SSL], (uint) 20);
   getProtocols("./pcaps/ssl-4.pcap",
-               protocols); // Short flows and we do not see syn. We detect only if we disable TCP reordering.
-  EXPECT_EQ(protocols[PFWL_PROTO_L7_SSL], (uint) 0);
+               protocols); // Short flows and we do not see syn. We detect some only, with TCP reordering.
+  EXPECT_EQ(protocols[PFWL_PROTO_L7_SSL], (uint) 3);
   pfwl_state_t *state = pfwl_init();
   pfwl_tcp_reordering_disable(state);
   getProtocols("./pcaps/ssl-4.pcap", protocols,
@@ -211,5 +211,45 @@ TEST(SSLTest, JA3Tags) {
     }
   });
   EXPECT_TRUE(found);
+  pfwl_terminate(state);
+}
+
+TEST(SSLTest, MultiPackets) {
+  std::vector<uint> protocols;
+  pfwl_state_t *state = pfwl_init();
+  pfwl_field_add_L7(state, PFWL_FIELDS_L7_SSL_SNI);
+  pfwl_field_add_L7(state, PFWL_FIELDS_L7_SSL_JA3);
+
+  pfwl_tcp_reordering_disable(state);
+
+  bool serverNameFound = false;
+  bool ja3ClientFound = false;
+  bool ja3ServerFound = false;
+
+  getProtocols("./pcaps/ssl-5.pcap", protocols, state, [&](pfwl_status_t status, pfwl_dissection_info_t r) {
+    pfwl_string_t field;
+    if (status >= PFWL_STATUS_OK && r.l7.protocol == PFWL_PROTO_L7_SSL &&
+        !pfwl_field_string_get(r.l7.protocol_fields, PFWL_FIELDS_L7_SSL_SNI, &field)) {
+      if (strncmp((const char *) field.value, "fr.m.wikipedia.org", field.length) == 0) {
+        serverNameFound = true;
+      }
+    }
+    if (status >= PFWL_STATUS_OK && r.l7.protocol == PFWL_PROTO_L7_SSL && r.l4.direction == PFWL_DIRECTION_OUTBOUND &&
+        !pfwl_field_string_get(r.l7.protocol_fields, PFWL_FIELDS_L7_SSL_JA3, &field)) {
+      if (strncmp((const char *) field.value, "b7c4cb2099b0b77cee0705edba7e8177", field.length) == 0) {
+        ja3ClientFound = true;
+      }
+    }
+    if (status >= PFWL_STATUS_OK && r.l7.protocol == PFWL_PROTO_L7_SSL && r.l4.direction == PFWL_DIRECTION_INBOUND &&
+        !pfwl_field_string_get(r.l7.protocol_fields, PFWL_FIELDS_L7_SSL_JA3, &field)) {
+      if (strncmp((const char *) field.value, "15af977ce25de452b96affa2addb1036", field.length) == 0) {
+        ja3ServerFound = true;
+      }
+    }
+  });
+  EXPECT_TRUE(serverNameFound);
+  EXPECT_TRUE(ja3ClientFound);
+  EXPECT_TRUE(ja3ServerFound);
+
   pfwl_terminate(state);
 }

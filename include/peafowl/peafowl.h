@@ -587,6 +587,8 @@ typedef struct pfwl_dissection_info_l4 {
   size_t payload_length; ///< Length of L4 payload.
   uint16_t port_src;     ///< Source port, in network byte order.
   uint16_t port_dst;     ///< Destination port, in network byte order.
+  uint32_t seq_num;      ///< Raw Sequence Number
+  uint32_t next_seq_num; ///< Expected Raw Sequence Number of the next packet
   pfwl_direction_t direction;     ///< Direction of the packet:
                          ///< OUTBOUND: From source to dest. INBOUND: From dest to source
                          ///< (with respect to src and dst stored in the flow).
