@@ -33,6 +33,16 @@
 #define SSL_BIDIRECTIONAL \
   0 // If set to 1, before confirming that the flow is SSL, we expect to see SSL header in both directions
 
+typedef enum {
+  TLS_invalid = 0,
+  TLS_change_cipher_spec = 0x14,
+  TLS_alert = 0x15,
+  TLS_handshake = 0x16,
+  TLS_application_data = 0x17,
+  TLS_heartbeat = 0x18, /* RFC 6520 */
+
+} pfwl_ssl_content_type_t;
+
 #define PFWL_DEBUG_SSL 0
 #define debug_print(fmt, ...)            \
   do {                                   \
@@ -139,6 +149,17 @@ static void stripCertificateTrailer(char *buffer, size_t *buffer_len) {
   }
 }
 
+static void ssl_flow_cleaner(pfwl_flow_info_private_t *flow_info_private) {
+  if (flow_info_private->ssl_information.ssl_data) {
+    free(flow_info_private->ssl_information.ssl_data);
+    flow_info_private->ssl_information.ssl_data = NULL;
+  }
+  if (flow_info_private->ssl_information.certificates) {
+    free(flow_info_private->ssl_information.certificates);
+    flow_info_private->ssl_information.certificates = NULL;
+  }
+}
+
 static int processExtensions(pfwl_state_t *state, pfwl_flow_info_private_t *flow_info_private, int offset,
                              const unsigned char *payload, uint16_t extensions_len, uint extension_offset,
                              size_t data_length, char *buffer, size_t buffer_len, pfwl_field_t *fields,
@@ -151,6 +172,9 @@ static int processExtensions(pfwl_state_t *state, pfwl_flow_info_private_t *flow
   size_t ellpoints_offset = 0;
   uint8_t ellcurves_present = 0;
   uint8_t ellpoints_present = 0;
+  char *server_name = NULL;
+  uint32_t server_name_length = 0;
+
   while (extension_offset < extensions_len) {
     if (offset + extension_offset > data_length) {
       *next_server_extension = offset + extension_offset - data_length;
@@ -171,9 +195,7 @@ static int processExtensions(pfwl_state_t *state, pfwl_flow_info_private_t *flow
     extension_len = ntohs(get_u16(payload, offset + extension_offset));
     extension_offset += 2;
 
-#if PFWL_DEBUG_SSL
-    printf("SSL [extension_id: %u][extension_len: %u]\n", extension_id, extension_len);
-#endif
+    debug_print("SSL [extension_id: %u][extension_len: %u]\n", extension_id, extension_len);
 
     if ((pfwl_protocol_field_required(state, flow_info_private, PFWL_FIELDS_L7_SSL_EXTENSIONS) ||
          pfwl_protocol_field_required(state, flow_info_private, PFWL_FIELDS_L7_SSL_JA3)) &&
@@ -184,7 +206,7 @@ static int processExtensions(pfwl_state_t *state, pfwl_flow_info_private_t *flow
     // TODO Check that offset + extension_offset + extension_len < data_length
     if (extension_id == 0) {
       u_int begin = 0, len;
-      char *server_name = (char *) &payload[offset + extension_offset];
+      server_name = (char *) &payload[offset + extension_offset];
 
       if (offset + extension_offset + extension_len >= data_length) {
         goto end;
@@ -197,15 +219,15 @@ static int processExtensions(pfwl_state_t *state, pfwl_flow_info_private_t *flow
           break;
       }
 
+      server_name += begin;
+
       len = buffer_len ? MIN(extension_len - begin, buffer_len - 1) : 0;
-      strncpy(buffer, &server_name[begin], len);
+      strncpy(buffer, server_name, len);
       buffer[len] = '\0';
       stripCertificateTrailer(buffer, &buffer_len);
-#if PFWL_DEBUG_SSL
-      printf("SNI: %s\n", buffer);
-#endif
-      // Do not set from buffer since is allocated on stack.
-      pfwl_field_string_set(fields, PFWL_FIELDS_L7_SSL_SNI, (const unsigned char *) &server_name[begin], buffer_len);
+      debug_print("SNI: %s\n", buffer);
+      server_name_length = buffer_len;
+
     } else if (extension_id == 10 && extension_len > 2) {
       // Elliptic curves
       ellcurves_present = 1;
@@ -231,10 +253,8 @@ static int processExtensions(pfwl_state_t *state, pfwl_flow_info_private_t *flow
     if (handshake_msg_type != CLIENT_HELLO) {
       ja3_last_byte = state->scratchpad_next_byte - 1;
     }
-#if PFWL_DEBUG_SSL
-    printf("Extensions: %s\n", extensions);
-    printf("SPAD: %s\n", state->scratchpad);
-#endif
+    debug_print("Extensions: %s\n", extensions);
+    debug_print("SPAD: %s\n", state->scratchpad);
     pfwl_field_string_set(fields, PFWL_FIELDS_L7_SSL_EXTENSIONS, (const unsigned char *) extensions,
                           extensions_next_char);
   }
@@ -267,10 +287,8 @@ static int processExtensions(pfwl_state_t *state, pfwl_flow_info_private_t *flow
       }
       sprintf(curves + curves_next_char, ",");
       state->scratchpad_next_byte += curves_next_char + 1; // +1 for the comma
-#if PFWL_DEBUG_SSL
-      printf("Curves: %s\n", curves);
-      printf("SPAD: %s\n", state->scratchpad);
-#endif
+      debug_print("Curves: %s\n", curves);
+      debug_print("SPAD: %s\n", state->scratchpad);
       pfwl_field_string_set(fields, PFWL_FIELDS_L7_SSL_ELLIPTIC_CURVES, (const unsigned char *) curves,
                             curves_next_char);
     } else {
@@ -307,10 +325,8 @@ static int processExtensions(pfwl_state_t *state, pfwl_flow_info_private_t *flow
       }
       points[points_next_char] = '\0';
       state->scratchpad_next_byte += points_next_char;
-#if PFWL_DEBUG_SSL
-      printf("CurvesPointFmt: %s\n", points);
-      printf("SPAD: %s\n", state->scratchpad);
-#endif
+      debug_print("CurvesPointFmt: %s\n", points);
+      debug_print("SPAD: %s\n", state->scratchpad);
       pfwl_field_string_set(fields, PFWL_FIELDS_L7_SSL_ELLIPTIC_CURVES_POINT_FMTS, (const unsigned char *) points,
                             points_next_char);
     }
@@ -319,14 +335,23 @@ static int processExtensions(pfwl_state_t *state, pfwl_flow_info_private_t *flow
     }
   }
 
+  // If we found server name, copy it to scratchpad and set field accordingly
+  if (server_name) {
+    // We can have SNI set in TLS info, but no server name provided
+    if (server_name_length > 0) {
+      memcpy(state->scratchpad + state->scratchpad_next_byte, server_name, server_name_length);
+    }
+    pfwl_field_string_set(fields, PFWL_FIELDS_L7_SSL_SNI,
+                          (const unsigned char *) state->scratchpad + state->scratchpad_next_byte, server_name_length);
+    state->scratchpad_next_byte += server_name_length;
+  }
+
   // Compute JA3
   pfwl_string_t dummy, dummy2;
   if ((pfwl_protocol_field_required(state, flow_info_private, PFWL_FIELDS_L7_SSL_JA3)) &&
       !pfwl_field_string_get(fields, PFWL_FIELDS_L7_SSL_VERSION_HANDSHAKE, &dummy) &&
       !pfwl_field_string_get(fields, PFWL_FIELDS_L7_SSL_CIPHER_SUITES, &dummy2)) {
-#if PFWL_DEBUG_SSL
-    printf("JA3 Fields: %.*s\n", ja3_last_byte - scratchpad_start, state->scratchpad + scratchpad_start);
-#endif
+    debug_print("JA3 Fields: %.*s\n", (int) (ja3_last_byte - scratchpad_start), state->scratchpad + scratchpad_start);
     MD5_CTX ctx;
     MD5_Init(&ctx);
     MD5_Update(&ctx, state->scratchpad + scratchpad_start, ja3_last_byte - scratchpad_start);
@@ -338,9 +363,7 @@ static int processExtensions(pfwl_state_t *state, pfwl_flow_info_private_t *flow
       sprintf(state->scratchpad + state->scratchpad_next_byte, "%02x", md5[n]);
       state->scratchpad_next_byte += 2;
     }
-#if PFWL_DEBUG_SSL
-    printf("JA3: %.*s\n", 32, ja3_start);
-#endif
+    debug_print("JA3: %.*s\n", 32, ja3_start);
     pfwl_field_string_set(fields, PFWL_FIELDS_L7_SSL_JA3, (const unsigned char *) ja3_start, 32);
   }
   // TODO: Everytime we write on scratchpad we should check that the max length is not exceeded
@@ -349,10 +372,9 @@ end:
 }
 
 /* Code fixes courtesy of Alexsandro Brahm <alex@digistar.com.br> */
-static int getSSLcertificate(pfwl_state_t *state, pfwl_flow_info_private_t *flow_info_private, uint32_t proc_bytes,
-                             const unsigned char *hdr, const unsigned char *payload, size_t data_length, char *buffer,
-                             size_t buffer_len, pfwl_field_t *fields, uint32_t *next_server_extension,
-                             uint32_t *remaining_extension_len) {
+static int getSSLcertificate(pfwl_state_t *state, pfwl_flow_info_private_t *flow_info_private, const unsigned char *hdr,
+                             const unsigned char *payload, size_t data_length, char *buffer, size_t buffer_len,
+                             pfwl_field_t *fields, uint32_t *next_server_extension, uint32_t *remaining_extension_len) {
   /*
     Nothing matched so far: let's decode the certificate with some heuristics
     Patches courtesy of Denys Fedoryshchenko <nuclearcat@nuclearcat.com>
@@ -360,6 +382,8 @@ static int getSSLcertificate(pfwl_state_t *state, pfwl_flow_info_private_t *flow
   size_t ssl_length = ntohs(get_u16(hdr, 3)) + 5;
   u_int8_t handshake_msg_type =
       hdr[5]; /* handshake protocol a bit misleading, it is message type according TLS specs */
+
+  debug_print("handshake type %d \n", handshake_msg_type);
 
   if (pfwl_protocol_field_required(state, flow_info_private, PFWL_FIELDS_L7_SSL_HANDSHAKE_TYPE)) {
     pfwl_field_number_set(fields, PFWL_FIELDS_L7_SSL_HANDSHAKE_TYPE, handshake_msg_type);
@@ -391,7 +415,7 @@ static int getSSLcertificate(pfwl_state_t *state, pfwl_flow_info_private_t *flow
 
     /* Check after handshake protocol header (5 bytes) and message header (4 bytes) */
     size_t i;
-    int first_payload_byte = 9 - proc_bytes;
+    int first_payload_byte = 9;
     if (first_payload_byte < 0) {
       first_payload_byte = 0;
     }
@@ -439,13 +463,21 @@ static int getSSLcertificate(pfwl_state_t *state, pfwl_flow_info_private_t *flow
 
             if (num_dots >= 2) {
               stripCertificateTrailer(buffer, &buffer_len);
-#if PFWL_DEBUG_SSL
-              printf("CERT: %s\n", buffer);
-#endif
-              // Do not set from buffer since is allocated on stack.
-              pfwl_field_string_set(fields, PFWL_FIELDS_L7_SSL_CERTIFICATE, (const unsigned char *) &server_name[begin],
-                                    buffer_len);
-              return (1 /* Server Certificate */);
+              debug_print("CERT: %s\n", buffer);
+              // Copy data into SSL information so that it can be retrieved later
+              // We do no use scratchpad as it coulg be bigger than it
+              if (flow_info_private->ssl_information.certificates) {
+                free(flow_info_private->ssl_information.certificates);
+                flow_info_private->ssl_information.certificates = NULL;
+              }
+              flow_info_private->ssl_information.certificates = calloc(1, buffer_len + 1);
+              if (flow_info_private->ssl_information.certificates) {
+                memcpy(flow_info_private->ssl_information.certificates, &server_name[begin], buffer_len);
+                pfwl_field_string_set(fields, PFWL_FIELDS_L7_SSL_CERTIFICATE,
+                                      (const unsigned char *) flow_info_private->ssl_information.certificates,
+                                      buffer_len);
+                return (1 /* Server Certificate */);
+              }
             }
           }
         }
@@ -480,9 +512,7 @@ static int getSSLcertificate(pfwl_state_t *state, pfwl_flow_info_private_t *flow
           offset = base_offset + session_id_len + 2;
           cypher_offset = base_offset + session_id_len + 1;
         }
-#if PFWL_DEBUG_SSL
-        printf("CypherLen: %d\n", cypher_len);
-#endif
+        debug_print("CypherLen: %d\n", cypher_len);
         if (pfwl_protocol_field_required(state, flow_info_private, PFWL_FIELDS_L7_SSL_CIPHER_SUITES) ||
             pfwl_protocol_field_required(state, flow_info_private, PFWL_FIELDS_L7_SSL_JA3)) {
           if (cypher_len) {
@@ -503,10 +533,8 @@ static int getSSLcertificate(pfwl_state_t *state, pfwl_flow_info_private_t *flow
             }
             sprintf(cyphers + cyphers_next_char, ",");
             state->scratchpad_next_byte += cyphers_next_char + 1; // +1 for the comma
-#if PFWL_DEBUG_SSL
-            printf("Cyphers: %s\n", cyphers);
-            printf("SPAD: %s\n", state->scratchpad);
-#endif
+            debug_print("Cyphers: %s\n", cyphers);
+            debug_print("SPAD: %s\n", state->scratchpad);
 
             pfwl_field_string_set(fields, PFWL_FIELDS_L7_SSL_CIPHER_SUITES, (const unsigned char *) cyphers,
                                   cyphers_next_char);
@@ -529,9 +557,7 @@ static int getSSLcertificate(pfwl_state_t *state, pfwl_flow_info_private_t *flow
           compression_len = payload[offset];
           offset++;
 
-#if PFWL_DEBUG_SSL
-          printf("SSL [compression_len: %u]\n", compression_len);
-#endif
+          debug_print("SSL [compression_len: %u]\n", compression_len);
 
           // offset += compression_len + 3;
           offset += compression_len;
@@ -543,9 +569,7 @@ static int getSSLcertificate(pfwl_state_t *state, pfwl_flow_info_private_t *flow
             extensions_len = ntohs(get_u16(payload, offset));
             offset += 2;
 
-#if PFWL_DEBUG_SSL
-            printf("SSL [extensions_len: %u]\n", extensions_len);
-#endif
+            debug_print("SSL [extensions_len: %u]\n", extensions_len);
 
             return processExtensions(state, flow_info_private, offset, payload, extensions_len, 0, data_length, buffer,
                                      buffer_len, fields, next_server_extension, remaining_extension_len,
@@ -559,11 +583,11 @@ end_notfound:
   return (0); /* Not found */
 }
 
-int inspectHandshake(pfwl_state_t *state, uint32_t proc_bytes, const unsigned char *hdr, const unsigned char *payload,
-                     size_t data_length, pfwl_flow_info_private_t *flow, pfwl_field_t *fields,
-                     uint32_t *next_server_extension, uint32_t *remaining_extension_len) {
+int inspectHandshake(pfwl_state_t *state, const unsigned char *hdr, const unsigned char *payload, size_t data_length,
+                     pfwl_flow_info_private_t *flow, pfwl_field_t *fields, uint32_t *next_server_extension,
+                     uint32_t *remaining_extension_len) {
   /* consider only specific SSL packets (handshake) */
-  if (hdr[0] == 0x16 || hdr[0] == 0x17) {
+  if (hdr[0] == TLS_handshake) {
     if (pfwl_protocol_field_required(state, flow, PFWL_FIELDS_L7_SSL_VERSION)) {
       uint16_t vernum = ntohs(get_u16(payload, 1));
       pfwl_field_number_set(fields, PFWL_FIELDS_L7_SSL_VERSION, vernum);
@@ -572,14 +596,12 @@ int inspectHandshake(pfwl_state_t *state, uint32_t proc_bytes, const unsigned ch
     int rc;
 
     certificate[0] = '\0';
-    rc = getSSLcertificate(state, flow, proc_bytes, hdr, payload, data_length, certificate, sizeof(certificate), fields,
+    rc = getSSLcertificate(state, flow, hdr, payload, data_length, certificate, sizeof(certificate), fields,
                            next_server_extension, remaining_extension_len);
     flow->ssl_information.certificate_num_checks++;
     if (rc > 0) {
       flow->ssl_information.certificates_detected++;
-#if PFWL_DEBUG_SSL
       debug_print("***** [SSL] %s\n", certificate);
-#endif
       // Search for known host in certificate, strlen(certificate)
       return PFWL_PROTOCOL_MATCHES;
     }
@@ -594,123 +616,181 @@ int inspectHandshake(pfwl_state_t *state, uint32_t proc_bytes, const unsigned ch
 uint8_t check_ssl(pfwl_state_t *state, const unsigned char *payload, size_t data_length,
                   pfwl_dissection_info_t *pkt_info, pfwl_flow_info_private_t *flow_info_private) {
 
-  // Save first bytes
-  unsigned char *hdr = flow_info_private->ssl_information.first_bytes[pkt_info->l4.direction];
-  uint8_t *hdr_next = &(flow_info_private->ssl_information.next_first_bytes[pkt_info->l4.direction]);
-  uint32_t *proc_bytes = &(flow_info_private->ssl_information.processed_bytes[pkt_info->l4.direction]);
-  if (*hdr_next < 6) {
-    size_t i = 0;
-    for (i = 0; i < data_length && i < 6u - *hdr_next; i++) {
-      hdr[i + *hdr_next] = payload[i];
-    }
-    *hdr_next = i;
-    if (*hdr_next < 6) {
-      *proc_bytes += data_length;
-      return PFWL_PROTOCOL_MORE_DATA_NEEDED;
-    }
-  }
-  *hdr_next = 0;
+  uint8_t ret = PFWL_PROTOCOL_NO_MATCHES;
 
-  debug_print("%s\n", "checking ssl...");
+  flow_info_private->flow_cleaners_dissectors[PFWL_PROTO_L7_SSL] = &ssl_flow_cleaner;
 
-  if (pfwl_protocol_field_required(state, flow_info_private, PFWL_FIELDS_L7_SSL_VERSION) ||
-      pfwl_protocol_field_required(state, flow_info_private, PFWL_FIELDS_L7_SSL_VERSION_HANDSHAKE) ||
-      pfwl_protocol_field_required(state, flow_info_private, PFWL_FIELDS_L7_SSL_HANDSHAKE_TYPE) ||
-      pfwl_protocol_field_required(state, flow_info_private, PFWL_FIELDS_L7_SSL_CERTIFICATE) ||
-      pfwl_protocol_field_required(state, flow_info_private, PFWL_FIELDS_L7_SSL_SNI) ||
-      pfwl_protocol_field_required(state, flow_info_private, PFWL_FIELDS_L7_SSL_EXTENSIONS) ||
-      pfwl_protocol_field_required(state, flow_info_private, PFWL_FIELDS_L7_SSL_ELLIPTIC_CURVES) ||
-      pfwl_protocol_field_required(state, flow_info_private, PFWL_FIELDS_L7_SSL_ELLIPTIC_CURVES_POINT_FMTS) ||
-      pfwl_protocol_field_required(state, flow_info_private, PFWL_FIELDS_L7_SSL_JA3)) {
-    return inspectHandshake(state, *proc_bytes, hdr, payload, data_length, flow_info_private,
-                            pkt_info->l7.protocol_fields, &(flow_info_private->ssl_information.next_server_extension),
-                            &(flow_info_private->ssl_information.remaining_extension_len));
+  debug_print("%s\n", "checking ssl..");
+
+  if (pkt_info->l3.protocol == PFWL_PROTO_L3_IPV4) {
+    debug_print("SRC %d.%d.%d.%d:%u  DST %d.%d.%d.%d:%u  seq %u\n", (pkt_info->l3.addr_src.ipv4 & 0x000000FF),
+                (pkt_info->l3.addr_src.ipv4 & 0x0000FF00) >> 8, (pkt_info->l3.addr_src.ipv4 & 0x00FF0000) >> 16,
+                (pkt_info->l3.addr_src.ipv4 & 0xFF000000) >> 24,
+                ((pkt_info->l4.port_src & 0xFF) << 8) + ((pkt_info->l4.port_src & 0xFF00) >> 8),
+
+                (pkt_info->l3.addr_dst.ipv4 & 0x000000FF), (pkt_info->l3.addr_dst.ipv4 & 0x0000FF00) >> 8,
+                (pkt_info->l3.addr_dst.ipv4 & 0x00FF0000) >> 16, (pkt_info->l3.addr_dst.ipv4 & 0xFF000000) >> 24,
+                ((pkt_info->l4.port_dst & 0xFF) << 8) + ((pkt_info->l4.port_dst & 0xFF00) >> 8), pkt_info->l4.seq_num);
   }
 
-  if (flow_info_private->ssl_information.stage == 0) {
-    debug_print("%s\n", "first ssl packet");
-    // SSLv2 Record
-    if (hdr[2] == 0x01 && hdr[3] == 0x03 && (hdr[4] == 0x00 || hdr[4] == 0x01 || hdr[4] == 0x02)) {
-      flow_info_private->ssl_information.version = PFWL_SSLV2;
-      debug_print("%s\n", "SSL v2 len match");
-      size_t ssl_length = hdr[1] + 2;
-      if (ssl_length == data_length) {
-#if SSL_BIDIRECTIONAL
-        flow_info_private->ssl_information.stage = 1 + pkt_info->l4.direction;
-        return PFWL_PROTOCOL_MORE_DATA_NEEDED;
-#else
-        return PFWL_PROTOCOL_MATCHES;
-#endif
-      } else if (data_length > ssl_length) {
-        return PFWL_PROTOCOL_NO_MATCHES;
-      } else {
-        *proc_bytes += data_length;
-        if (*proc_bytes == ssl_length) {
-#if SSL_BIDIRECTIONAL
-          flow_info_private->ssl_information.stage = 1 + pkt_info->l4.direction;
-          return PFWL_PROTOCOL_MORE_DATA_NEEDED;
-#else
-          return PFWL_PROTOCOL_MATCHES;
-#endif
-        } else {
-          return PFWL_PROTOCOL_MORE_DATA_NEEDED;
-        }
-      }
+  // "analyzed_payload" points to the beginning of a ssl packet
+  // It can be packet payload (not to free) or it can be start of previous packet
+  // data that have been stored in flow_info_private->ssl_information.ssl_data->packets_data
+  unsigned char *analyzed_payload = (unsigned char *) payload;
+  size_t analyzed_data_length = data_length;
+  size_t ssl_length = 0;
+  pfwl_ssl_internal_packet_data_t *data_to_free = NULL;
+
+  if (flow_info_private->ssl_information.ssl_data != NULL) {
+    debug_print("prev packet length %u \n",
+                flow_info_private->ssl_information.ssl_data->packets_data_len[pkt_info->l4.direction]);
+    if (flow_info_private->ssl_information.ssl_data->next_seq_num[pkt_info->l4.direction] == pkt_info->l4.seq_num) {
+      debug_print("%s\n", "TCP sequence is correct");
+
+      // Reassemble data with previous data
+      memcpy(flow_info_private->ssl_information.ssl_data->packets_data[pkt_info->l4.direction] +
+                 flow_info_private->ssl_information.ssl_data->packets_data_len[pkt_info->l4.direction],
+             analyzed_payload, analyzed_data_length);
+
+      analyzed_payload = flow_info_private->ssl_information.ssl_data->packets_data[pkt_info->l4.direction];
+      analyzed_data_length += flow_info_private->ssl_information.ssl_data->packets_data_len[pkt_info->l4.direction];
+      // ss_ldata will be deleted at the end of the function
+      data_to_free = flow_info_private->ssl_information.ssl_data;
+      flow_info_private->ssl_information.ssl_data = NULL;
+    } else {
+      debug_print("TCP OUT OF ORDER seq_num %u  prev %u \n",
+                  flow_info_private->ssl_information.ssl_data->next_seq_num[pkt_info->l4.direction],
+                  pkt_info->l4.seq_num);
+      free(flow_info_private->ssl_information.ssl_data);
+      flow_info_private->ssl_information.ssl_data = NULL;
     }
+  }
+
+  while (analyzed_data_length >= 6) {
+    unsigned char *hdr = analyzed_payload;
+
+    // Compute ssl length
 
     // SSLv3 Record
-    if ((hdr[0] == 0x16 || hdr[0] == 0x17) && hdr[1] == 0x03 &&
-        (hdr[2] == 0x00 || hdr[2] == 0x01 || hdr[2] == 0x02 || hdr[2] == 0x03)) {
-      if (hdr[0] == 0x16) {
+    if ((hdr[0] == TLS_change_cipher_spec) || (hdr[0] == TLS_handshake) || (hdr[0] == TLS_application_data) ||
+        (hdr[0] == TLS_heartbeat) || (hdr[0] == TLS_alert)) {
+      // Check Protocol version
+      if ((hdr[1] == 0x03) && (hdr[2] == 0x00 || hdr[2] == 0x01)) {
+        debug_print("%s\n", "SSL v3 detected");
         flow_info_private->ssl_information.version = PFWL_SSLV3;
-        debug_print("%s\n", "SSL v3 len match");
-      } else {
+      } else if ((hdr[1] == 0x03) && (hdr[2] == 0x02 || hdr[2] == 0x03)) {
+        debug_print("%s\n", "TLS v1.2 or v1.3 detected");
         flow_info_private->ssl_information.version = PFWL_TLSV1_2;
-        debug_print("%s\n", "TLS v1.2 len match");
       }
-      size_t ssl_length = ntohs(get_u16(hdr, 3)) + 5;
-      if (ssl_length == data_length) {
-#if SSL_BIDIRECTIONAL
-        flow_info_private->ssl_information.stage = 1 + pkt_info->l4.direction;
-        return PFWL_PROTOCOL_MORE_DATA_NEEDED;
-#else
-        return PFWL_PROTOCOL_MATCHES;
-#endif
-      } else if (data_length > ssl_length) {
-        return PFWL_PROTOCOL_NO_MATCHES;
-      } else {
-        *proc_bytes += data_length;
-        if (*proc_bytes == ssl_length) {
+      ssl_length = ntohs(get_u16(hdr, 3)) + 5;
+    } else if (hdr[2] == 0x01 && hdr[3] == 0x03 && (hdr[4] == 0x00 || hdr[4] == 0x01 || hdr[4] == 0x02)) {
+      flow_info_private->ssl_information.version = PFWL_SSLV2;
+      debug_print("%s\n", "SSL v2 len match");
+      ssl_length = hdr[1] + 2;
+    }
+
+    debug_print("SSL length %lu \n", ssl_length);
+
+    if (ssl_length == 0) {
+      ret = PFWL_PROTOCOL_NO_MATCHES;
+      goto end;
+    }
+
+    // Check if we have received all the packets to analyze handshake
+    debug_print("ssl_length %lu data_length %lu \n", ssl_length, analyzed_data_length);
+    if (analyzed_data_length < ssl_length) {
+      goto more_data_needed;
+    }
+
+    if (flow_info_private->ssl_information.stage == 0) {
+      // SSLv2 Record
+      if (hdr[2] == 0x01 && hdr[3] == 0x03 && (hdr[4] == 0x00 || hdr[4] == 0x01 || hdr[4] == 0x02)) {
+        flow_info_private->ssl_information.version = PFWL_SSLV2;
+        debug_print("%s\n", "SSL v2 len match");
+
+        if (ssl_length == analyzed_data_length) {
 #if SSL_BIDIRECTIONAL
           flow_info_private->ssl_information.stage = 1 + pkt_info->l4.direction;
-          return PFWL_PROTOCOL_MORE_DATA_NEEDED;
+          // packet if full but we need to wait for server answer
+          ret = PFWL_PROTOCOL_MORE_DATA_NEEDED;
 #else
-          return PFWL_PROTOCOL_MATCHES;
+          ret = PFWL_PROTOCOL_MATCHES;
 #endif
-        } else {
-          return PFWL_PROTOCOL_MORE_DATA_NEEDED;
+        }
+      }
+
+      // SSLv3 Record
+      if ((hdr[0] == TLS_handshake || hdr[0] == TLS_application_data) && hdr[1] == 0x03 &&
+          (hdr[2] == 0x00 || hdr[2] == 0x01 || hdr[2] == 0x02 || hdr[2] == 0x03)) {
+        if (ssl_length == analyzed_data_length) {
+#if SSL_BIDIRECTIONAL
+          flow_info_private->ssl_information.stage = 1 + pkt_info->l4.direction;
+          // packet if full but we need to wait for server answer
+          ret = PFWL_PROTOCOL_MORE_DATA_NEEDED;
+#else
+          ret = PFWL_PROTOCOL_MATCHES;
+#endif
         }
       }
     }
-  }
 
 #if SSL_BIDIRECTIONAL
-  if (flow_info_private->ssl_information.stage != 0) {
-    if (hdr[2] == 0x01 && hdr[3] == 0x03 && (hdr[4] == 0x00 || hdr[4] == 0x01 || hdr[4] == 0x02) &&
-        flow_info_private->ssl_information.version == PFWL_SSLV2) {
-      return PFWL_PROTOCOL_MATCHES;
-    }
-
-    if ((hdr[0] == 0x16 || hdr[0] == 0x17) && hdr[1] == 0x03 &&
-        (hdr[2] == 0x00 || hdr[2] == 0x01 || hdr[2] == 0x02 || hdr[2] == 0x03)) {
-      if ((flow_info_private->ssl_information.version == PFWL_SSLV3 && hdr[0] == 0x16) ||
-          (flow_info_private->ssl_information.version == PFWL_TLSV1_2 && hdr[0] == 0x17)) {
-        return PFWL_PROTOCOL_MATCHES;
+    if (flow_info_private->ssl_information.stage != 0) {
+      if ((hdr[0] == TLS_handshake || hdr[0] == TLS_application_data) && hdr[1] == 0x03 &&
+          (hdr[2] == 0x00 || hdr[2] == 0x01 || hdr[2] == 0x02 || hdr[2] == 0x03)) {
+        if ((flow_info_private->ssl_information.version == PFWL_SSLV3 && hdr[0] == TLS_handshake) ||
+            (flow_info_private->ssl_information.version == PFWL_TLSV1_2 && hdr[0] == TLS_application_data)) {
+          ret = PFWL_PROTOCOL_MATCHES;
+        }
+      } else if (hdr[2] == 0x01 && hdr[3] == 0x03 && (hdr[4] == 0x00 || hdr[4] == 0x01 || hdr[4] == 0x02) &&
+                 flow_info_private->ssl_information.version == PFWL_SSLV2) {
+        ret = PFWL_PROTOCOL_MATCHES;
       }
     }
-  }
 #endif
 
-  debug_print("%s\n", "ssl doesn't match");
-  return PFWL_PROTOCOL_NO_MATCHES;
+    if (pfwl_protocol_field_required(state, flow_info_private, PFWL_FIELDS_L7_SSL_VERSION) ||
+        pfwl_protocol_field_required(state, flow_info_private, PFWL_FIELDS_L7_SSL_VERSION_HANDSHAKE) ||
+        pfwl_protocol_field_required(state, flow_info_private, PFWL_FIELDS_L7_SSL_HANDSHAKE_TYPE) ||
+        pfwl_protocol_field_required(state, flow_info_private, PFWL_FIELDS_L7_SSL_CERTIFICATE) ||
+        pfwl_protocol_field_required(state, flow_info_private, PFWL_FIELDS_L7_SSL_SNI) ||
+        pfwl_protocol_field_required(state, flow_info_private, PFWL_FIELDS_L7_SSL_EXTENSIONS) ||
+        pfwl_protocol_field_required(state, flow_info_private, PFWL_FIELDS_L7_SSL_ELLIPTIC_CURVES) ||
+        pfwl_protocol_field_required(state, flow_info_private, PFWL_FIELDS_L7_SSL_ELLIPTIC_CURVES_POINT_FMTS) ||
+        pfwl_protocol_field_required(state, flow_info_private, PFWL_FIELDS_L7_SSL_JA3)) {
+
+      ret = inspectHandshake(state, hdr, analyzed_payload, analyzed_data_length, flow_info_private,
+                             pkt_info->l7.protocol_fields, &(flow_info_private->ssl_information.next_server_extension),
+                             &(flow_info_private->ssl_information.remaining_extension_len));
+    }
+
+    analyzed_payload += ssl_length;
+    analyzed_data_length -= ssl_length;
+    debug_print("processed %lu  remains %lu \n", ssl_length, analyzed_data_length);
+  }
+
+more_data_needed:
+  if (analyzed_data_length != 0) {
+    if (analyzed_data_length < PFWL_SSL_MAX_DATA_SIZE) {
+      // We do not have enough data, we need to copy current data and wait for next packet data
+      flow_info_private->ssl_information.ssl_data =
+          (pfwl_ssl_internal_packet_data_t *) calloc(1, sizeof(pfwl_ssl_internal_packet_data_t));
+      if (flow_info_private->ssl_information.ssl_data) {
+        memcpy(flow_info_private->ssl_information.ssl_data->packets_data[pkt_info->l4.direction], analyzed_payload,
+               analyzed_data_length);
+        flow_info_private->ssl_information.ssl_data->packets_data_len[pkt_info->l4.direction] = analyzed_data_length;
+        flow_info_private->ssl_information.ssl_data->next_seq_num[pkt_info->l4.direction] = pkt_info->l4.next_seq_num;
+      }
+
+      ret = PFWL_PROTOCOL_MORE_DATA_NEEDED;
+    } else {
+      ret = PFWL_PROTOCOL_ERROR;
+    }
+  }
+
+end:
+  if (data_to_free != NULL) {
+    free(data_to_free);
+  }
+  return ret;
 }

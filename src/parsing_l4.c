@@ -125,6 +125,7 @@ pfwl_status_t mc_pfwl_parse_L4_header(pfwl_state_t *state, const unsigned char *
 #endif
     dissection_info->l4.port_src = tcp_copy.source;
     dissection_info->l4.port_dst = tcp_copy.dest;
+    dissection_info->l4.seq_num = ntohl(tcp_copy.seq);
     dissection_info->l4.length = (tcp_copy.doff * 4);
     syn = tcp_copy.syn;
   } break;
@@ -159,7 +160,11 @@ pfwl_status_t mc_pfwl_parse_L4_header(pfwl_state_t *state, const unsigned char *
     memcpy(&tcp_copy, pkt, sizeof(tcp_copy));
     if (tcp_copy.syn) {
       flow->info.statistics[PFWL_STAT_L4_TCP_COUNT_SYN][direction]++;
+      dissection_info->l4.next_seq_num = dissection_info->l4.seq_num + 1;
+    } else {
+      dissection_info->l4.next_seq_num = dissection_info->l4.seq_num + dissection_info->l4.payload_length;
     }
+
     if (tcp_copy.fin) {
       flow->info.statistics[PFWL_STAT_L4_TCP_COUNT_FIN][direction]++;
     }
