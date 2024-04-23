@@ -172,12 +172,31 @@ static inline uint32_t get_bucket_expiring_id(uint32_t now, pfwl_timestamp_unit_
 
 static inline pfwl_flow_t *get_next_expiring_flow(uint32_t now, pfwl_timestamp_unit_t unit,
                                                   const pfwl_flow_table_partition_t &info) {
+  pfwl_flow_t *oldest_flow = NULL;
+  uint64_t oldest_flow_timestamp = 0; // last timestamp of the oldest flow
+
   size_t i = get_bucket_expiring_id(now, unit);
   while (info.expiration_buckets[i]->empty()) {
     i = (i + 1) % PFWL_FLOW_TABLE_MAX_IDLE_TIME;
   }
-  debug_print("Next expiring flow in bucket %zd\n", i);
-  return *(info.expiration_buckets[i]->begin());
+  debug_print(" Next expiring flow in bucket %zd\n", i);
+
+  // Look for the oldest flow in the bucket.
+  for (auto it = info.expiration_buckets[i]->begin(); it != info.expiration_buckets[i]->end(); ++it) {
+    uint64_t flow_timestamp = (*it)->info_private.last_insertion_timestamp;
+
+    if (oldest_flow == NULL) {
+      oldest_flow = *it;
+      oldest_flow_timestamp = flow_timestamp;
+    } else {
+      if (flow_timestamp < oldest_flow_timestamp) {
+        oldest_flow = *it;
+        oldest_flow_timestamp = flow_timestamp;
+      }
+    }
+  }
+
+  return oldest_flow;
 }
 
 #ifndef PFWL_DEBUG
@@ -640,6 +659,12 @@ pfwl_flow_t *mc_pfwl_flow_table_find_or_create_flow(pfwl_flow_table_t *db, uint1
   }
 #endif
   pfwl_flow_info_t *finfo = &iterator->info;
+  pfwl_flow_info_private_t *finfo_private = &iterator->info_private;
+
+  struct timespec cur_time;
+  clock_gettime(CLOCK_MONOTONIC, &cur_time);
+  finfo_private->last_insertion_timestamp = (cur_time.tv_sec * 1000) + (cur_time.tv_nsec / 1000000);
+
   if ((finfo->port_src == dissection_info->l4.port_src) &&
       (((dissection_info->l3.protocol == PFWL_PROTO_L3_IPV4) &&
         (finfo->addr_src.ipv4 == dissection_info->l3.addr_src.ipv4)) ||
