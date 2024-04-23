@@ -714,8 +714,14 @@ uint32_t pfwl_compute_v4_hash_function(const pfwl_flow_table_t *db, const pfwl_d
 pfwl_flow_t *pfwl_flow_table_find_or_create_flow(pfwl_flow_table_t *db, pfwl_dissection_info_t *pkt_info,
                                                  const char *protocols_to_inspect, uint8_t tcp_reordering_enabled,
                                                  double timestamp, uint8_t syn, pfwl_timestamp_unit_t unit) {
-  return mc_pfwl_flow_table_find_or_create_flow(db, 0, pfwl_compute_v4_hash_function(db, pkt_info), pkt_info,
-                                                protocols_to_inspect, tcp_reordering_enabled, timestamp, syn, unit);
+  uint32_t index;
+  if (pkt_info->l3.protocol == PFWL_PROTO_L3_IPV6) {
+    index = pfwl_compute_v6_hash_function(db, pkt_info);
+  } else {
+    index = pfwl_compute_v4_hash_function(db, pkt_info);
+  }
+  return mc_pfwl_flow_table_find_or_create_flow(db, 0, index, pkt_info, protocols_to_inspect, tcp_reordering_enabled,
+                                                timestamp, syn, unit);
 }
 
 uint32_t pfwl_compute_v6_hash_function(const pfwl_flow_table_t *db, const pfwl_dissection_info_t *const pkt_info) {
