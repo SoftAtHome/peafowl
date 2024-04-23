@@ -299,6 +299,8 @@ typedef struct pfwl_flow_info_private {
   /** STUN tracking information         **/
   /***************************************/
   char stun_mapped_address[INET6_ADDRSTRLEN];
+
+  uint64_t last_insertion_timestamp; // Indicates last time flow has been inserted in flow table
 } pfwl_flow_info_private_t;
 
 struct pfwl_flow {
