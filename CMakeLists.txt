@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.5.1)
-project(peafowl VERSION 1.1.3)
+project(peafowl VERSION 1.1.4)
 set (CMAKE_CXX_STANDARD 11)
 set (CMAKE_C_STANDARD 11)
 set (CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_SOURCE_DIR}/cmake/modules/")
