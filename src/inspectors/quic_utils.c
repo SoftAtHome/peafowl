@@ -55,7 +55,9 @@ uint32_t quic_getu32(const unsigned char *start, size_t offset) {
 #endif
 }
 
-/* Quic variable length Integer decoding algorithm */
+/**
+ *  @brief QUIC variable length Integer decoding algorithm 
+ */
 size_t quic_get_variable_len(const unsigned char *app_data, size_t offset, uint64_t *var_len) {
   size_t mbit = app_data[offset] >> 6;
   size_t len = 0;
@@ -114,6 +116,9 @@ void debug_print_rawfield(const unsigned char *app_data, size_t start_offset, si
   printf("\n");
 }
 
+/**
+ * @brief Function to allocate memory and copy data to it. Similar to 'strdup' but for general memory.
+ */
 void *memdup(const uint8_t *orig, size_t len) {
   void *dest = malloc(len);
   if (dest)

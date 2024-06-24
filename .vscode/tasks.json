@@ -1,0 +1,41 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"type": "cmake",
+			"command": "bash",
+    		"isShellCommand": true,
+    		"showOutput": "always",
+    		"options": {
+        		"cwd": "${workspaceRoot}/build"
+    		},
+			"args": [
+				
+			],
+			"tasks": [
+				{
+					"taskName": "build",
+					"suppressTaskName": true,
+					"isBuildCommand": true,
+					"args": ["make build"]
+				},
+				{
+					"taskName": "test",
+					"suppressTaskName": true,
+					"isTestCommand": true,
+					"args": ["make test"]
+				},
+				{
+					"taskName": "deploy",
+					"suppressTaskName": true,
+					"args": ["make deploy"]
+				},
+				{
+					"taskName": "help",
+					"suppressTaskName": true,
+					"args": ["make help"]
+				}
+			]
+		}
+	]
+}

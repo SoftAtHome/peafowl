@@ -34,6 +34,7 @@
 #include <openssl/err.h>
 #include <openssl/evp.h>
 #include <openssl/kdf.h>
+#include <openssl/sha.h>
 
 #include "quic_ssl_utils.h"
 
@@ -188,6 +189,7 @@ int aes_gcm_decrypt(const unsigned char *ciphertext, int ciphertext_len, const E
    * anything else is a failure - the plaintext is not trustworthy.
    */
   ret = EVP_DecryptFinal_ex(ctx, plaintext + len, &len);
+  ERR_print_errors(stderr);
 
   /* Clean up */
   EVP_CIPHER_CTX_free(ctx);
@@ -198,6 +200,8 @@ int aes_gcm_decrypt(const unsigned char *ciphertext, int ciphertext_len, const E
     return plaintext_len;
   } else {
     /* Verify failed */
+    ERR_print_errors(stderr);
+    printf("plaintext: %s\n", plaintext);
     return -1;
   }
 }
@@ -460,6 +464,13 @@ int md5_digest_message(const unsigned char *message, size_t message_len, unsigne
 
   EVP_MD_CTX_free(mdctx);
   return digest_len;
+}
+
+int sha256_digest_message(const unsigned char *message, size_t message_len, unsigned char *digest) {
+    SHA256_CTX sha256;
+    SHA256_Init(&sha256);
+    SHA256_Update(&sha256, message, message_len);
+    SHA256_Final(digest, &sha256);
 }
 
 #endif

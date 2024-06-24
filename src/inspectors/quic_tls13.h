@@ -32,11 +32,25 @@
 
 #ifdef HAVE_OPENSSL
 
-void tls13_parse_google_user_agent(pfwl_state_t *state, const unsigned char *data, size_t len, pfwl_dissection_info_t *pkt_info, pfwl_flow_info_private_t *flow_info_private);
+//Vorige Brecht
+/* void tls13_parse_google_user_agent(pfwl_state_t *state, const unsigned char *data, size_t len, pfwl_dissection_info_t *pkt_info, pfwl_flow_info_private_t *flow_info_private);
 void tls13_parse_quic_transport_params(pfwl_state_t *state, const unsigned char *data, size_t len, pfwl_dissection_info_t *pkt_info, pfwl_flow_info_private_t *flow_info_private);
+void tls13_parse_supported_groups(pfwl_state_t *state, const unsigned char *data, size_t len, pfwl_dissection_info_t *pkt_info, pfwl_flow_info_private_t *flow_info_private,
+ unsigned char *ja3_supgrps_string, size_t *ja3_supgrps_string_len);
 void tls13_parse_servername(pfwl_state_t *state, const unsigned char *data, size_t len, pfwl_dissection_info_t *pkt_info, pfwl_flow_info_private_t *flow_info_private);
-void tls13_parse_extensions(pfwl_state_t *state, const unsigned char *data, size_t len, pfwl_dissection_info_t *pkt_info, pfwl_flow_info_private_t *flow_info_private, char *ja3_string, size_t *ja3_string_len);
-uint8_t check_tls13(pfwl_state_t *state, const unsigned char *tls_data, size_t tls_data_length, pfwl_dissection_info_t *pkt_info, pfwl_flow_info_private_t *flow_info_private);
+void tls13_parse_extensions(pfwl_state_t *state, const unsigned char *data, size_t len, pfwl_dissection_info_t *pkt_info, pfwl_flow_info_private_t *flow_info_private, 
+unsigned char *ja3_string, size_t *ja3_string_len, unsigned char *ja3_supgrps_string, size_t *ja3_supgrps_string_len);
+uint8_t check_tls13(pfwl_state_t *state, const unsigned char *tls_data, size_t tls_data_length, pfwl_dissection_info_t *pkt_info, pfwl_flow_info_private_t *flow_info_private, uint32_t quic_version);
+ */
+
+//SoftAtHome
+void tls13_parse_servername(pfwl_state_t *state, const unsigned char *data, size_t len,
+							pfwl_dissection_info_t *pkt_info, pfwl_flow_info_private_t *flow_info_private);
+void tls13_parse_extensions(pfwl_state_t *state, const unsigned char *data, size_t len,
+							pfwl_dissection_info_t *pkt_info, pfwl_flow_info_private_t *flow_info_private,
+							char *ja3_string, size_t *ja3_string_len);
+uint8_t check_tls13(pfwl_state_t *state, const unsigned char *tls_data, size_t tls_data_length,
+					pfwl_dissection_info_t *pkt_info, pfwl_flow_info_private_t *flow_info_private, uint32_t quic_version);
 
 #else
 	uint8_t check_tls13(pfwl_state_t *state, const unsigned char *app_data,

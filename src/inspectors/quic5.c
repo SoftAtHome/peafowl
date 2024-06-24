@@ -41,42 +41,45 @@
 #define MAX_CONNECTION_ID_LENGTH 20
 #define MAX_STRING_LENGTH 256
 #define MAX_SALT_LENGTH 20
+#define MAX_TOKEN_LENGTH 70
 #define MAX_LABEL_LENGTH 32
 #define HASH_SHA2_256_LENGTH 32
 #define TLS13_AEAD_NONCE_LENGTH 12
 
 typedef struct {
-  unsigned int first_byte;
-  size_t dst_conn_id_len;
-  unsigned char dst_conn_id[MAX_CONNECTION_ID_LENGTH];
-  size_t src_conn_id_len;
-  unsigned char src_conn_id[MAX_CONNECTION_ID_LENGTH];
-  size_t header_len;
-  uint32_t version;
-  size_t packet_number;
-  size_t packet_number_len;
-  uint64_t payload_len;
+	unsigned int first_byte;
+	size_t dst_conn_id_len;
+	unsigned char dst_conn_id[MAX_CONNECTION_ID_LENGTH];
+	size_t src_conn_id_len;
+	unsigned char src_conn_id[MAX_CONNECTION_ID_LENGTH];
+	size_t header_len;
+	uint32_t version;
+	size_t packet_number;
+	size_t packet_number_len;
+  size_t token_len;
+  unsigned char token[MAX_TOKEN_LENGTH];
+	size_t payload_len;
+	
+	unsigned char *decrypted_payload;
+	size_t decrypted_payload_len;
 
-  unsigned char *decrypted_payload;
-  size_t decrypted_payload_len;
+	const EVP_CIPHER *quic_cipher_mode;
 
-  const EVP_CIPHER *quic_cipher_mode;
+	unsigned char quic_secret[HASH_SHA2_256_LENGTH];
+	size_t quic_secret_len;
 
-  unsigned char quic_secret[HASH_SHA2_256_LENGTH];
-  size_t quic_secret_len;
-
-  unsigned char quic_key[32];
-  size_t quic_key_len;
-  unsigned char quic_hp[32];
-  size_t quic_hp_len;
-  unsigned char quic_iv[TLS13_AEAD_NONCE_LENGTH];
-  size_t quic_iv_len;
-  unsigned int has_tls13_record;
+	unsigned char quic_key[32];
+	size_t quic_key_len;
+	unsigned char quic_hp[32];
+	size_t quic_hp_len;
+	unsigned char quic_iv[TLS13_AEAD_NONCE_LENGTH];
+	size_t quic_iv_len;
+	unsigned int has_tls13_record;
 } quic_t;
 
 /* Quic Versions */
 typedef enum {
-  VER_Q024 = 0x51303234,
+	VER_Q024 = 0x51303234,
   VER_Q025 = 0x51303235,
   VER_Q030 = 0x51303330,
   VER_Q033 = 0x51303333,
@@ -100,7 +103,13 @@ typedef enum {
   VER_DRAFT27 = (int) 0xff00001b,
   VER_DRAFT28 = (int) 0xff00001c,
   VER_DRAFT29 = (int) 0xff00001d,
+  VER_DRAFT30 = (int) 0xff00001e,
+	VER_DRAFT31 = (int) 0xff00001f,
+	VER_DRAFT32 = (int) 0xff000020,
+	VER_DRAFT33 = (int) 0xff000021,
+	VER_DRAFT34 = (int) 0xff000022,
   VER_ONE = 0x00000001,
+  VER_TWO = 0x6b3343cf, //Version 2 draft 10
 } quic_version_t;
 
 #define PFWL_DEBUG_DISS_QUIC 1
@@ -127,7 +136,7 @@ static size_t convert_length_connection(size_t len){
 }
 */
 
-static int quic_version_tostring(const uint32_t qver, char *ver, const size_t ver_len) {
+static int quic_version_tostring(const uint32_t qver, unsigned char *ver, const size_t ver_len) {
   size_t len = 0;
 
   switch (qver) {
@@ -151,6 +160,11 @@ static int quic_version_tostring(const uint32_t qver, char *ver, const size_t ve
   case VER_DRAFT27:
   case VER_DRAFT28:
   case VER_DRAFT29:
+  case VER_DRAFT30:
+  case VER_DRAFT31:
+  case VER_DRAFT32:
+  case VER_DRAFT33:
+  case VER_DRAFT34:
     len = snprintf(ver, ver_len, "draft-%d", qver & 0xff);
     break;
 
@@ -163,6 +177,9 @@ static int quic_version_tostring(const uint32_t qver, char *ver, const size_t ve
     len = snprintf(ver, ver_len, "1");
     break;
 
+  case VER_TWO:
+    len = snprintf(ver, ver_len, "2");
+
   default:
     len = snprintf(ver, ver_len, "unknown");
   }
@@ -170,7 +187,7 @@ static int quic_version_tostring(const uint32_t qver, char *ver, const size_t ve
 }
 
 /**
- * Compute the client and server initial secrets given Connection ID "cid".
+ * @brief Compute the client and server initial secrets given Connection ID "cid".
  */
 static int quic_derive_initial_secrets(quic_t *quic_info) {
   /*
@@ -197,6 +214,8 @@ static int quic_derive_initial_secrets(quic_t *quic_info) {
                                                         0x86, 0xf1, 0x9c, 0x61, 0x11, 0xe0, 0x43, 0x90, 0xa8, 0x99};
   static const uint8_t ver_one_salt[MAX_SALT_LENGTH] = {0x38, 0x76, 0x2c, 0xf7, 0xf5, 0x59, 0x34, 0xb3, 0x4d, 0x17,
                                                         0x9a, 0xe6, 0xa4, 0xc8, 0x0c, 0xad, 0xcc, 0xbb, 0x7f, 0x0a};
+  static const uint8_t ver_two_salt[MAX_SALT_LENGTH] = {0x0d, 0xed, 0xe3, 0xde, 0xf7, 0x00, 0xa6, 0xdb, 0x81, 0x93,
+                                                        0x81, 0xbe, 0x6e, 0x26, 0x9d, 0xcb, 0xf9, 0xbd, 0x2e, 0xd9};
   const uint8_t *salt;
 
   switch (quic_info->version) {
@@ -242,6 +261,10 @@ static int quic_derive_initial_secrets(quic_t *quic_info) {
     quic_info->has_tls13_record = 1;
     break;
 
+  case VER_TWO:
+    salt = ver_two_salt;
+    quic_info->has_tls13_record = 1;
+
   default:
     printf("Error matching the quic version to a salt using standard salt instead\n");
     salt = ver_q050_salt;
@@ -265,8 +288,8 @@ static int quic_derive_initial_secrets(quic_t *quic_info) {
   return 0;
 }
 
-/*
- * (Re)initialize the PNE/PP ciphers using the given cipher algorithm.
+/**
+ * @brief (Re)initialize the PNE/PP ciphers using the given cipher algorithm.
  * If the optional base secret is given, then its length MUST match the hash
  * algorithm output.
  */
@@ -293,8 +316,9 @@ static int quic_cipher_prepare(quic_t *quic_info) {
   return 0;
 }
 
+
 /**
- * Given a QUIC message (header + non-empty payload), the actual packet number,
+ * @brief given a QUIC message (header + non-empty payload), the actual packet number,
  * try to decrypt it using the cipher.
  * As the header points to the original buffer with an encrypted packet number,
  * the (encrypted) packet number length is also included.
@@ -339,9 +363,11 @@ static int quic_decrypt_message(quic_t *quic_info, const uint8_t *packet_payload
   int ret = aes_gcm_decrypt(packet_payload + quic_info->header_len, quic_info->payload_len - 16u, evp_cipher, header,
                             quic_info->header_len, atag, quic_info->quic_key, nonce, sizeof(nonce),
                             quic_info->decrypted_payload);
+  
   if (ret < 0) {
     free(quic_info->decrypted_payload);
     quic_info->decrypted_payload = NULL;
+    quic_info->decrypted_payload_len = 0;
     free(header);
     return -1;
   }
@@ -479,9 +505,11 @@ uint8_t check_quic5(pfwl_state_t *state, const unsigned char *app_data, size_t d
         return PFWL_PROTOCOL_NO_MATCHES;
       }
 
-      uint64_t token_len = 0;
-      quic_info.header_len += quic_get_variable_len(app_data, quic_info.header_len, &token_len);
-      quic_info.header_len += token_len;
+      quic_info.header_len += quic_get_variable_len(app_data, quic_info.header_len, &quic_info.token_len);
+      quic_info.header_len += quic_info.token_len;
+
+      memcpy(quic_info.token, &app_data[quic_info.header_len], quic_info.token_len);
+      quic_info.token[quic_info.token_len] = '\0';
 
       if (quic_info.header_len >= data_length) {
         return PFWL_PROTOCOL_NO_MATCHES;
@@ -521,7 +549,7 @@ uint8_t check_quic5(pfwl_state_t *state, const unsigned char *app_data, size_t d
        * crypto_data_len */
 
       if (quic_info.has_tls13_record) {
-        check_tls13(state, quic_info.decrypted_payload, quic_info.decrypted_payload_len, pkt_info, flow_info_private);
+        check_tls13(state, quic_info.decrypted_payload, quic_info.decrypted_payload_len, pkt_info, flow_info_private, quic_info.version);
       } else {
         /* PLZ Move me to a function */
         const unsigned char *chlo_start = (const unsigned char *) pfwl_strnstr(
@@ -586,4 +614,4 @@ uint8_t check_quic5(pfwl_state_t *state, const unsigned char *app_data, size_t d
 
   return PFWL_PROTOCOL_NO_MATCHES;
 }
-#endif
+#endif 

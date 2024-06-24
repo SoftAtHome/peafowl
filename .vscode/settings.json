@@ -1,0 +1,22 @@
+{
+    "C_Cpp.dimInactiveRegions": false,
+    "files.associations": {
+        "cstring": "c",
+        "compare": "c",
+        "array": "c",
+        "string": "c",
+        "string_view": "c",
+        "deque": "c",
+        "forward_list": "c",
+        "list": "c",
+        "unordered_map": "c",
+        "unordered_set": "c",
+        "vector": "c",
+        "iterator": "c",
+        "regex": "c",
+        "peafowl.h": "c",
+        "unistd.h": "c",
+        "evp.h": "c",
+        "inspectors.h": "c"
+    }
+}

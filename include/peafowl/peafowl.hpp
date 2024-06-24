@@ -41,7 +41,6 @@ namespace peafowl {
 class String {
 private:
   pfwl_string_t _string;
-
 public:
   /**
    * Constructs an empty string.
@@ -118,7 +117,6 @@ typedef pfwl_flows_strategy_t FlowsStrategy;
 class Field {
 private:
   pfwl_field_t _field;
-
 public:
   /**
    * Constructs an empty field.
@@ -163,7 +161,6 @@ class IpAddress {
 private:
   pfwl_ip_addr _addr;
   bool _isIPv6;
-
 public:
   /**
    * Builds the IP address.
@@ -462,7 +459,6 @@ public:
 class FlowInfo {
 private:
   pfwl_flow_info_t _flowInfo;
-
 public:
   /**
    * Constructor.
@@ -902,7 +898,6 @@ private:
   DissectionInfoL7 _l7;
   FlowInfo _flowInfo;
   Status _status;
-
 public:
   /**
    * Constructor.
@@ -1059,7 +1054,6 @@ private:
   bool _perHostMemoryLimitIPv4set, _perHostMemoryLimitIPv6set;
   bool _totalMemoryLimitIPv4set, _totalMemoryLimitIPv6set;
   bool _reassemblyTimeoutIPv4set, _reassemblyTimeoutIPv6set;
-
 public:
   /**
    * Constructor.
